@@ -17,29 +17,26 @@
 * Set required minimum amount of letters (a-z) or digits (0-9) in the addresses
 * Binaries built for Linux, macOS and Windows
 
-## Installing
-Download the latest binary release from the [_Releases_](https://github.com/hukkinj1/cosmosvanity/releases) page. Alternatively, build from source yourself.
 
-### Docker
-You can also run cosmosvanity using Docker:
+## Build from source (compile the binary)
 
 ```bash
-# Pull the image
-docker pull rattadan/cosmosvanity
-
-# Basic usage
-docker run rattadan/cosmosvanity
-
-# With specific parameters
-docker run rattadan/cosmosvanity --startswith test
-docker run rattadan/cosmosvanity --contains xyz --endswith 123
-
-# Use multiple CPU cores (replace 4 with desired number of cores)
-docker run --cpus=4 rattadan/cosmosvanity
-
-# Generate multiple addresses
-docker run rattadan/cosmosvanity -n 5
+go build -o cosmosvanity .
 ```
+
+Run it:
+
+```bash
+./cosmosvanity --help
+```
+
+If you have CUDA set up and want to include CUDA support, build with the `cuda` tag:
+
+```bash
+go build -tags=cuda -o cosmosvanity .
+```
+
+
 
 ## Usage examples
 Find an address that starts with "00000" (e.g. cosmos100000v3fpv4qg2a9ea6sj70gykxpt63wgjen2p)
