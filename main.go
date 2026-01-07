@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -15,10 +14,21 @@ import (
 
 	flag "github.com/spf13/pflag"
 
-	"github.com/cosmos/cosmos-sdk/types/bech32"
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcutil/bech32"
+	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/cosmos/go-bip39"
 	"github.com/tendermint/tendermint/crypto/secp256k1"
 )
+
+func bech32ConvertAndEncode(hrp string, data []byte) (string, error) {
+	// Convert from 8-bit groups to 5-bit groups as required by bech32.
+	fiveBit, err := bech32.ConvertBits(data, 8, 5, true)
+	if err != nil {
+		return "", err
+	}
+	return bech32.Encode(hrp, fiveBit)
+}
 
 type matcher struct {
 	StartsWith string
@@ -118,17 +128,41 @@ func GenerateWalletFromMnemonic(mnemonic string) (wallet, string, error) {
 	// Convert mnemonic to seed
 	seed := bip39.NewSeed(mnemonic, "") // Using empty password for now
 
-	// Derive a key from the seed using a simple approach
-	derivedKey := sha256.Sum256(seed)
+	// Standard Cosmos derivation: m/44'/118'/0'/0/0
+	master, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
+	if err != nil {
+		return wallet{}, "", err
+	}
+	purpose, err := master.Derive(hdkeychain.HardenedKeyStart + 44)
+	if err != nil {
+		return wallet{}, "", err
+	}
+	coinType, err := purpose.Derive(hdkeychain.HardenedKeyStart + 118)
+	if err != nil {
+		return wallet{}, "", err
+	}
+	account, err := coinType.Derive(hdkeychain.HardenedKeyStart + 0)
+	if err != nil {
+		return wallet{}, "", err
+	}
+	change, err := account.Derive(0)
+	if err != nil {
+		return wallet{}, "", err
+	}
+	addrIndex, err := change.Derive(0)
+	if err != nil {
+		return wallet{}, "", err
+	}
+	ecPriv, err := addrIndex.ECPrivKey()
+	if err != nil {
+		return wallet{}, "", err
+	}
+	privKeyBytes := ecPriv.Serialize()
 
-	// Use the first 32 bytes for private key
-	privKeyBytes := derivedKey[:32]
-
-	// Create a new private key by copying the derived bytes
-	privKey := secp256k1.GenPrivKeySecp256k1(privKeyBytes)
+	privKey := secp256k1.PrivKey(privKeyBytes)
 	pubKey := privKey.PubKey().(secp256k1.PubKey)
 
-	bech32Addr, err := bech32.ConvertAndEncode("cosmos", pubKey.Address())
+	bech32Addr, err := bech32ConvertAndEncode("cosmos", pubKey.Address())
 	if err != nil {
 		return wallet{}, "", err
 	}
@@ -139,7 +173,7 @@ func GenerateWalletFromMnemonic(mnemonic string) (wallet, string, error) {
 func generateWallet() wallet {
 	var privkey secp256k1.PrivKey = secp256k1.GenPrivKey()
 	var pubkey secp256k1.PubKey = privkey.PubKey().(secp256k1.PubKey)
-	bech32Addr, err := bech32.ConvertAndEncode("cosmos", pubkey.Address())
+	bech32Addr, err := bech32ConvertAndEncode("cosmos", pubkey.Address())
 	if err != nil {
 		panic(err)
 	}
