@@ -113,6 +113,16 @@ When `--leet` is enabled, the values provided to `--startswith`, `--contains`, a
 ./cosmosvanity --mnemonic --startswith helloiamdavethebrave --leet
 ```
 
+## Seed phrase (mnemonic) mode
+
+If you want the address to be recoverable from a 12-word seed phrase, enable mnemonic mode.
+
+In this mode, once a matching address is found the tool will also print the mnemonic.
+
+```bash
+./cosmosvanity --mnemonic --startswith 000
+```
+
 ## Regex matching
 
 You can also require the address payload (the part after `cosmos1`) to match a regular expression:
