@@ -9,13 +9,14 @@
 
 ## Features
 * Generate Cosmos bech32 vanity addresses
-* Use all CPU cores
 * Specify a substring that the addresses must
     * start with
     * end with
     * contain
 * Set required minimum amount of letters (a-z) or digits (0-9) in the addresses
-* Binaries built for Linux, macOS and Windows
+
+* New feature: Generate `ethsecp256k1` addresses for Cosmos EVM chains (like Evmos, Injective)
+* Customize the bech32 prefix (e.g. `cosmos`, `evmos`, `inj`)
 
 
 ## Build from source (compile the binary)
@@ -29,14 +30,6 @@ Run it:
 ```bash
 ./cosmosvanity --help
 ```
-
-If you have CUDA set up and want to include CUDA support, build with the `cuda` tag:
-
-```bash
-go build -tags=cuda -o cosmosvanity .
-```
-
-
 
 ## Usage examples
 Find an address that starts with "00000" (e.g. cosmos100000v3fpv4qg2a9ea6sj70gykxpt63wgjen2p)
@@ -79,6 +72,28 @@ Combine flags introduced above
 ./cosmosvanity --contains 8888 --startswith a --endswith c
 ```
 
+## EVM / ethsecp256k1 addresses
+
+Generate an Evmos-style `ethsecp256k1` address (uses Ethereum address derivation and bech32 encoding):
+
+```bash
+./cosmosvanity --evm --prefix evmos --startswith 000
+```
+
+The same derivation works for any Cosmos EVM chain by changing the prefix, e.g. Injective:
+
+```bash
+./cosmosvanity --evm --prefix inj --startswith 000
+```
+
+## Custom bech32 prefix
+
+You can change the bech32 prefix for non-EVM addresses too:
+
+```bash
+./cosmosvanity --prefix osmo --startswith 000
+```
+
 ## Bech32-friendly encoding ("leet" mode)
 
 Since Cosmos addresses use bech32, not every character you might want for a word is available (for example: `b`, `i`, `o`, and `1`).
@@ -107,17 +122,15 @@ hell0lamdavethe8rave
 When `--leet` is enabled, the values provided to `--startswith`, `--contains`, and `--endswith` are converted automatically before searching.
 
 ```bash
-./cosmosvanity --mnemonic --startswith helloiamdavethebrave --leet
+./cosmosvanity --startswith helloiamdavethebrave --leet
 ```
 
-## Seed phrase (mnemonic) mode
+## Seed phrase (mnemonic)
 
-If you want the address to be recoverable from a 12-word seed phrase, enable mnemonic mode.
-
-In this mode, once a matching address is found the tool will also print the mnemonic.
+Every generated address is derived from a random 12-word BIP39 seed phrase, which is printed alongside the address so you can recover it in any compatible wallet.
 
 ```bash
-./cosmosvanity --mnemonic --startswith 000
+./cosmosvanity --startswith 000
 ```
 
 ## Regex matching
@@ -130,6 +143,7 @@ You can also require the address payload (the part after `cosmos1`) to match a r
 
 ### Nerd-language regex (auto bech32-safe)
 
+Some letters are restricted in bech32 alphabet, so you can replace them with similiar symbols
 If you'd like to write patterns using common "nerd" substitutions (like `e`/`3`, `o`/`0`) while still staying compatible with the bech32 character set, you can use `--nerdregex`.
 
 Example:

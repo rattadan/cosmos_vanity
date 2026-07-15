@@ -14,11 +14,13 @@ import (
 
 	flag "github.com/spf13/pflag"
 
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcutil/bech32"
 	"github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/cosmos/go-bip39"
 	"github.com/tendermint/tendermint/crypto/secp256k1"
+	"golang.org/x/crypto/sha3"
 )
 
 func bech32ConvertAndEncode(hrp string, data []byte) (string, error) {
@@ -40,7 +42,9 @@ type matcher struct {
 }
 
 func (m matcher) Match(candidate string) bool {
-	candidate = strings.TrimPrefix(candidate, "cosmos1")
+	if sep := strings.Index(candidate, "1"); sep != -1 {
+		candidate = candidate[sep+1:]
+	}
 	if !strings.HasPrefix(candidate, m.StartsWith) {
 		return false
 	}
@@ -119,7 +123,7 @@ func GenerateMnemonic() (string, error) {
 }
 
 // GenerateWalletFromMnemonic creates a wallet from a 12-word mnemonic
-func GenerateWalletFromMnemonic(mnemonic string) (wallet, string, error) {
+func GenerateWalletFromMnemonic(mnemonic string, prefix string, evm bool) (wallet, string, error) {
 	// Validate the mnemonic first
 	if !bip39.IsMnemonicValid(mnemonic) {
 		return wallet{}, "", fmt.Errorf("invalid mnemonic")
@@ -129,6 +133,11 @@ func GenerateWalletFromMnemonic(mnemonic string) (wallet, string, error) {
 	seed := bip39.NewSeed(mnemonic, "") // Using empty password for now
 
 	// Standard Cosmos derivation: m/44'/118'/0'/0/0
+	// Ethereum-compatible EVM chains typically use coin type 60.
+	coinType := uint32(118)
+	if evm {
+		coinType = 60
+	}
 	master, err := hdkeychain.NewMaster(seed, &chaincfg.MainNetParams)
 	if err != nil {
 		return wallet{}, "", err
@@ -137,11 +146,11 @@ func GenerateWalletFromMnemonic(mnemonic string) (wallet, string, error) {
 	if err != nil {
 		return wallet{}, "", err
 	}
-	coinType, err := purpose.Derive(hdkeychain.HardenedKeyStart + 118)
+	coinTypeKey, err := purpose.Derive(hdkeychain.HardenedKeyStart + coinType)
 	if err != nil {
 		return wallet{}, "", err
 	}
-	account, err := coinType.Derive(hdkeychain.HardenedKeyStart + 0)
+	account, err := coinTypeKey.Derive(hdkeychain.HardenedKeyStart + 0)
 	if err != nil {
 		return wallet{}, "", err
 	}
@@ -159,35 +168,56 @@ func GenerateWalletFromMnemonic(mnemonic string) (wallet, string, error) {
 	}
 	privKeyBytes := ecPriv.Serialize()
 
-	privKey := secp256k1.PrivKey(privKeyBytes)
-	pubKey := privKey.PubKey().(secp256k1.PubKey)
-
-	bech32Addr, err := bech32ConvertAndEncode("cosmos", pubKey.Address())
+	w, err := deriveWallet(privKeyBytes, prefix, evm)
 	if err != nil {
 		return wallet{}, "", err
 	}
 
-	return wallet{bech32Addr, pubKey, privKey}, mnemonic, nil
+	return w, mnemonic, nil
 }
 
-func generateWallet() wallet {
-	var privkey secp256k1.PrivKey = secp256k1.GenPrivKey()
-	var pubkey secp256k1.PubKey = privkey.PubKey().(secp256k1.PubKey)
-	bech32Addr, err := bech32ConvertAndEncode("cosmos", pubkey.Address())
+func deriveWallet(privKeyBytes []byte, prefix string, evm bool) (wallet, error) {
+	prefix = strings.ToLower(prefix)
+
+	_, pubKey := btcec.PrivKeyFromBytes(privKeyBytes)
+	if evm {
+		uncompressed := pubKey.SerializeUncompressed()
+		h := sha3.NewLegacyKeccak256()
+		h.Write(uncompressed[1:])
+		hash := h.Sum(nil)
+		rawAddr := hash[len(hash)-20:]
+		addr, err := bech32ConvertAndEncode(prefix, rawAddr)
+		if err != nil {
+			return wallet{}, err
+		}
+		return wallet{Address: addr, Pubkey: uncompressed, Privkey: privKeyBytes}, nil
+	}
+
+	compressed := pubKey.SerializeCompressed()
+	tmPubKey := secp256k1.PubKey(compressed)
+	addr, err := bech32ConvertAndEncode(prefix, tmPubKey.Address())
+	if err != nil {
+		return wallet{}, err
+	}
+	return wallet{Address: addr, Pubkey: compressed, Privkey: privKeyBytes}, nil
+}
+
+func generateWallet(prefix string, evm bool) wallet {
+	privKeyBytes := secp256k1.GenPrivKey()
+	w, err := deriveWallet(privKeyBytes, prefix, evm)
 	if err != nil {
 		panic(err)
 	}
-
-	return wallet{bech32Addr, pubkey, privkey}
+	return w
 }
 
-func findMatchingWallets(ch chan wallet, quit chan struct{}, m matcher, attempts *uint64) {
+func findMatchingWallets(ch chan wallet, quit chan struct{}, m matcher, attempts *uint64, prefix string, evm bool) {
 	for {
 		select {
 		case <-quit:
 			return
 		default:
-			w := generateWallet()
+			w := generateWallet(prefix, evm)
 			atomic.AddUint64(attempts, 1)
 			if m.Match(w.Address) {
 				select {
@@ -206,7 +236,7 @@ type walletWithMnemonic struct {
 }
 
 // findMatchingWalletsMnemonic finds wallets using 12-word mnemonic generation
-func findMatchingWalletsMnemonic(ch chan walletWithMnemonic, quit chan struct{}, m matcher, attempts *uint64) {
+func findMatchingWalletsMnemonic(ch chan walletWithMnemonic, quit chan struct{}, m matcher, attempts *uint64, prefix string, evm bool) {
 	for {
 		select {
 		case <-quit:
@@ -217,7 +247,7 @@ func findMatchingWalletsMnemonic(ch chan walletWithMnemonic, quit chan struct{},
 				continue // Skip on error
 			}
 
-			w, usedMnemonic, err := GenerateWalletFromMnemonic(mnemonic)
+			w, usedMnemonic, err := GenerateWalletFromMnemonic(mnemonic, prefix, evm)
 			if err != nil {
 				continue // Skip on error
 			}
@@ -234,7 +264,7 @@ func findMatchingWalletsMnemonic(ch chan walletWithMnemonic, quit chan struct{},
 }
 
 // findMatchingWalletMnemonic finds wallets using mnemonic-based generation
-func findMatchingWalletMnemonic(m matcher, goroutines int) (wallet, string) {
+func findMatchingWalletMnemonic(m matcher, goroutines int, prefix string, evm bool) (wallet, string) {
 	ch := make(chan walletWithMnemonic)
 	quit := make(chan struct{})
 	defer close(quit)
@@ -247,7 +277,7 @@ func findMatchingWalletMnemonic(m matcher, goroutines int) (wallet, string) {
 
 	// Start mnemonic-based worker goroutines
 	for i := 0; i < goroutines; i++ {
-		go findMatchingWalletsMnemonic(ch, quit, m, &attempts)
+		go findMatchingWalletsMnemonic(ch, quit, m, &attempts, prefix, evm)
 	}
 
 	result := <-ch
@@ -350,7 +380,7 @@ func monitorHashRate(attempts *uint64, quit chan struct{}, expectedAttempts floa
 	}
 }
 
-func findMatchingWalletConcurrent(m matcher, goroutines int, useCUDA bool) wallet {
+func findMatchingWalletConcurrent(m matcher, goroutines int, useCUDA bool, prefix string, evm bool) wallet {
 	ch := make(chan wallet)
 	quit := make(chan struct{})
 	defer close(quit)
@@ -364,7 +394,7 @@ func findMatchingWalletConcurrent(m matcher, goroutines int, useCUDA bool) walle
 	// Start CPU worker goroutines if requested
 	if goroutines > 0 {
 		for i := 0; i < goroutines; i++ {
-			go findMatchingWallets(ch, quit, m, &attempts)
+			go findMatchingWallets(ch, quit, m, &attempts, prefix, evm)
 		}
 	}
 
@@ -533,8 +563,9 @@ func main() {
 	var walletsToFind = flag.IntP("count", "n", 1, "Amount of matching wallets to find")
 	var cpuCount = flag.Int("cpus", runtime.NumCPU(), "Amount of CPU cores to use")
 	var useCUDA = flag.Bool("cuda", false, "Use CUDA acceleration if available")
-	var useMnemonic = flag.Bool("mnemonic", false, "Generate addresses from random 12-word mnemonics")
 	var useLeet = flag.Bool("leet", false, "Convert provided matchers (startswith/contains/endswith) to bech32-friendly leetspeak")
+	var useEVM = flag.Bool("evm", false, "Use ethsecp256k1 (Ethereum-style) address derivation")
+	var bech32Prefix = flag.String("prefix", "cosmos", "Bech32 prefix for generated addresses (e.g. cosmos, evmos, inj)")
 	var encodeOnly = flag.String("encode", "", "Convert arbitrary text to a bech32-friendly pattern and exit")
 
 	var mustContain = flag.StringP("contains", "c", "", "A string that the address must contain")
@@ -561,6 +592,20 @@ func main() {
 	}
 	if *cpuCount < 0 || (*cpuCount == 0 && !*useCUDA) {
 		fmt.Println("ERROR: Must use either CUDA or at least 1 CPU core")
+		os.Exit(1)
+	}
+
+	prefix := strings.ToLower(*bech32Prefix)
+	if prefix == "" {
+		fmt.Println("ERROR: Bech32 prefix must not be empty")
+		os.Exit(1)
+	}
+	if strings.Contains(prefix, "1") {
+		fmt.Println("ERROR: Bech32 prefix must not contain '1'")
+		os.Exit(1)
+	}
+	if *useCUDA {
+		fmt.Println("ERROR: CUDA is not supported; mnemonic mode is always enabled")
 		os.Exit(1)
 	}
 
@@ -598,17 +643,10 @@ func main() {
 	var mnemonic string
 
 	for i := 0; i < *walletsToFind; i++ {
-		if *useMnemonic {
-			matchingWallet, mnemonic = findMatchingWalletMnemonic(m, *cpuCount)
-		} else {
-			matchingWallet = findMatchingWalletConcurrent(m, *cpuCount, *useCUDA)
-		}
+		matchingWallet, mnemonic = findMatchingWalletMnemonic(m, *cpuCount, prefix, *useEVM)
 
 		fmt.Printf(":::: Matching wallet %d/%d found ::::\n", i+1, *walletsToFind)
 		fmt.Println(matchingWallet)
-
-		if *useMnemonic && mnemonic != "" {
-			fmt.Printf("Mnemonic:\t%s\n", mnemonic)
-		}
+		fmt.Printf("Mnemonic:\t%s\n", mnemonic)
 	}
 }

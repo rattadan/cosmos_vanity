@@ -1,17 +1,33 @@
 package main
 
 import (
-	"testing"
 	"runtime"
 	"strings"
+	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateWallet(t *testing.T) {
-	w := generateWallet()
+	w := generateWallet("cosmos", false)
 	require.Equal(t, w.Address[:7], "cosmos1", "Incorrect bech32 prefix")
-	require.Equal(t, len(w.Address), 45, "Incorrect privkey length")
+	require.Equal(t, len(w.Address), 45, "Incorrect address length")
+	require.Equal(t, len(w.Pubkey), 33, "Incorrect pubkey length")
+	require.Equal(t, len(w.Privkey), 32, "Incorrect privkey length")
+}
+
+func TestGenerateWalletEVM(t *testing.T) {
+	w := generateWallet("evmos", true)
+	require.Equal(t, w.Address[:6], "evmos1", "Incorrect bech32 prefix")
+	require.Equal(t, len(w.Address), 44, "Incorrect address length")
+	require.Equal(t, len(w.Pubkey), 65, "Incorrect pubkey length")
+	require.Equal(t, len(w.Privkey), 32, "Incorrect privkey length")
+}
+
+func TestGenerateWalletPrefix(t *testing.T) {
+	w := generateWallet("inj", false)
+	require.Equal(t, w.Address[:4], "inj1", "Incorrect bech32 prefix")
+	require.Equal(t, len(w.Address), 42, "Incorrect address length")
 	require.Equal(t, len(w.Pubkey), 33, "Incorrect pubkey length")
 	require.Equal(t, len(w.Privkey), 32, "Incorrect privkey length")
 }
@@ -50,7 +66,7 @@ func TestFindMatchingWalletConcurrent(t *testing.T) {
 	m := matcher{
 		StartsWith: "abc",
 	}
-	w := findMatchingWalletConcurrent(m, runtime.NumCPU(), false)
+	w := findMatchingWalletConcurrent(m, runtime.NumCPU(), false, "cosmos", false)
 	if !strings.HasPrefix(w.Address[7:], "abc") {
 		t.Error("Generated address does not match the criteria")
 	}
